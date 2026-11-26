@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="theme-color" content="#101112">
+<meta name="description" content="Tu plan personal de fuerza de ocho semanas.">
+<title>Forja — Entrenamiento personal</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<aside class="sidebar" aria-label="Barra lateral">
+  <a class="brand" href="#entrenar" aria-label="Forja, entrenar"><span class="brand-icon" data-icon="bolt"></span> FORJA<span class="brand-dot">.</span></a>
+  <nav aria-label="Navegación principal">
+    <a href="#entrenar" data-page="entrenar"><span data-icon="dumbbell"></span>Entrenar</a>
+    <a href="#plan" data-page="plan"><span data-icon="calendar"></span>Mi plan</a>
+    <a href="#progreso" data-page="progreso"><span data-icon="chart"></span>Progreso</a>
+  </nav>
+  <div class="profile"><span class="avatar">P</span><div><strong>Mi perfil</strong><small>1.89 m · 80 kg</small></div></div>
+</aside>
+<header class="mobile-header">
+  <a class="brand" href="#entrenar" aria-label="Forja, entrenar"><span class="brand-icon" data-icon="bolt"></span> FORJA<span class="brand-dot">.</span></a>
+  <a class="avatar" href="#plan" aria-label="Mi plan">P</a>
+</header>
+<main id="main"></main>
+<div id="timer-bar" class="timer-bar" hidden></div>
+<dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+<div id="notice" role="status" class="notice" hidden></div>
+<noscript>Activa JavaScript para abrir tu plan de entrenamiento.</noscript>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

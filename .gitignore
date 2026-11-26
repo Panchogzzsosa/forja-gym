@@ -1,0 +1,6 @@
+/Forja.apk
+*.idsig
+*.jks
+*.keystore
+*.p12
+.DS_Store
