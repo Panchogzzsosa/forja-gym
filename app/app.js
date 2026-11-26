@@ -1,4 +1,4 @@
-import { exercises, weeks, phases, series, guides } from './plan.js';
+import { exercises, schedule, blocks, recommend, totalWeeks, legacySessions, series, guides } from './plan.js';
 
 const icons = {
   bolt: '<path d="m13 2-9 12h7l-1 8 10-12h-7l1-8Z"/>',
@@ -19,15 +19,30 @@ const icons = {
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
 const dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
-const sessions = weeks.flat();
-const storageKey = 'forja-v1';
-let data = {};
-try { data = JSON.parse(localStorage.getItem(storageKey)) || {}; } catch { /* Start with an empty log. */ }
+const storageKey = 'forja-v2';
+function readLog(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key)) || {};
+  } catch {
+    return {};
+  }
+}
+const data = readLog(storageKey);
+const legacy = readLog('forja-v1');
+const reviews = data.reviews ??= {};
+const weekSchedule = number => schedule(number, reviews[number]?.mode);
+const planSessions = () => Array.from({ length: totalWeeks }, (_, number) => weekSchedule(number)).flat();
 
-const entry = session => data[session.key] || {};
-const count = session => session.exercises.filter(id => entry(session)[id]?.done).length;
+const entry = (session, log = data) => log[session.key] || {};
+const count = (session, log = data) => session.exercises.filter(id => entry(session, log)[id]?.done).length;
 const complete = session => count(session) === session.exercises.length;
-const nextSession = () => sessions.find(session => !complete(session)) || sessions.at(-1);
+function nextSession() {
+  const sessions = planSessions();
+  return sessions.find(session => !complete(session)) || sessions.at(-1);
+}
+const locked = number => weekSchedule(number).some(session => Object.values(entry(session)).some(record =>
+  record.done || Number.isFinite(record.weight)));
+const currentBlock = number => blocks.find(({ end }) => number <= end);
 let week = nextSession().week;
 let day = nextSession().day;
 let currentPage;
@@ -38,16 +53,20 @@ const main = document.querySelector('#main');
 const modal = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
 const timerBar = document.querySelector('#timer-bar');
-const selectedSession = () => weeks[week].find(session => session.day === day);
-const phase = () => phases[Math.floor(week / 2)];
+const selectedSession = () => weekSchedule(week).find(session => session.day === day);
 const pad = value => String(value).padStart(2, '0');
 
 function save(session, id, value) {
   data[session.key] = { ...entry(session), [id]: { ...entry(session)[id], ...value } };
+  return persist();
+}
+function persist() {
   try {
     localStorage.setItem(storageKey, JSON.stringify(data));
+    return true;
   } catch {
     announce('El dispositivo no pudo guardar el registro. Los cambios siguen visibles mientras la app esté abierta.');
+    return false;
   }
 }
 function announce(message) {
@@ -57,40 +76,69 @@ function announce(message) {
   noticeTimeout = setTimeout(() => { notice.hidden = true; }, 4000);
 }
 function lastWeight(session, id) {
-  const earlier = sessions.slice(0, sessions.indexOf(session)).reverse();
-  return earlier.map(item => entry(item)[id]?.weight).find(weight => Number.isFinite(weight));
+  const sessions = planSessions();
+  const earlier = sessions.slice(0, sessions.findIndex(item => item.key === session.key)).reverse();
+  const recent = earlier.map(item => entry(item)[id]?.weight).find(Number.isFinite);
+  return recent ?? [...legacySessions].reverse().map(item => entry(item, legacy)[id]?.weight).find(Number.isFinite);
 }
 function hero(session) {
+  const finished = session && complete(session);
+  const title = session?.title || 'Recuperación';
+  const titleLines = session ? title.replace('Cuerpo ', 'Cuerpo<br>') : title;
   return `<section class="hero" aria-label="Sesión seleccionada">
     <div class="hero-content">
-      <div class="tag"><span></span> SEMANA ${pad(week + 1)} / 08 · ${phase()[0].toUpperCase()}</div>
-      <h1>${session ? session.title : 'Día de descanso'}</h1>
-      <p>${session ? 'Tu entrenamiento de cuerpo completo.' : 'Deja que tus músculos se recuperen. Si te apetece, da una caminata suave.'}</p>
-      ${session ? `<div class="hero-meta"><span>${icon('clock')} ${session.minutes} min</span><span>${icon('dumbbell')} ${session.exercises.length} ejercicios</span></div>
-        <button class="primary" data-action="${complete(session) ? 'next' : 'start'}">${complete(session) ? (sessions.every(complete) ? 'Ver mi progreso' : 'Ir a la siguiente sesión') : count(session) ? 'Continuar rutina' : 'Empezar rutina'} ${icon('arrow')}</button>` : `<button class="primary" data-action="next">Ir a mi próxima sesión ${icon('arrow')}</button>`}
+      <div class="tag">${dayNames[day]} <span> / </span> ${session ? currentBlock(week).label : 'Día libre'}</div>
+      <h1 aria-label="${title}">${titleLines}</h1>
+      ${session ? `<div class="hero-meta"><span>${icon('clock')} ${session.minutes} min</span><span>${session.reserve} reps en reserva</span></div>`
+        : '<p>Una caminata suave es suficiente si te apetece moverte.</p>'}
+      <button class="primary" data-action="${!session || finished ? 'next' : 'start'}">
+        ${!session ? 'Ir a la siguiente sesión' : finished ? (planSessions().every(complete) ? 'Ver progreso' : 'Ir a la siguiente sesión') : count(session) ? 'Continuar rutina' : 'Empezar rutina'} ${icon('arrow')}
+      </button>
     </div>
+    <div class="plate" aria-hidden="true"><span>${session?.code ?? '—'}</span></div>
   </section>`;
 }
 function calendar() {
-  return `<section class="surface calendar" aria-label="Calendario de entrenamiento">
-    <div class="calendar-top"><h2>Semana ${pad(week + 1)}</h2>
-      <div class="week-controls"><button data-action="week" data-value="-1" aria-label="Semana anterior" ${week === 0 ? 'disabled' : ''}>${icon('left')}</button><button data-action="week" data-value="1" aria-label="Semana siguiente" ${week === 7 ? 'disabled' : ''}>${icon('right')}</button></div>
+  const sessions = weekSchedule(week);
+  return `<section class="calendar" aria-label="Calendario de entrenamiento">
+    <div class="calendar-top"><h2>Semana ${pad(week + 1)}<small> / ${pad(totalWeeks)}</small></h2>
+      <div class="week-controls"><button data-action="week" data-value="-1" aria-label="Semana anterior" ${week === 0 ? 'disabled' : ''}>${icon('left')}</button><button data-action="week" data-value="1" aria-label="Semana siguiente" ${week === totalWeeks - 1 ? 'disabled' : ''}>${icon('right')}</button></div>
     </div>
     <div class="days">${dayNames.map((name, index) => {
-      const session = weeks[week].find(item => item.day === index);
-      const label = session ? (complete(session) ? 'Sesión completa' : session.title.at(-1)) : 'Descanso';
-      return `<button class="day ${session ? 'training' : ''}" data-action="day" data-value="${index}" aria-pressed="${index === day}" aria-label="${name}, ${session && !complete(session) ? session.title : label}"><span>${name.slice(0, 3)}</span><strong>${label === 'Sesión completa' ? icon('check') : session ? label : '·'}</strong></button>`;
+      const session = sessions.find(item => item.day === index);
+      const done = session && complete(session);
+      const label = session ? session.title + (done ? ', completa' : '') : 'Descanso';
+      return `<button class="day ${session ? 'training' : ''}" data-action="day" data-value="${index}" aria-pressed="${index === day}" aria-label="${name}, ${label}"><span>${name.slice(0, 3)}</span><strong>${done ? icon('check') : session?.code ?? '–'}</strong></button>`;
     }).join('')}</div>
-    <div class="legend"><span><i></i> Entrenamiento</span><span><i></i> Descanso</span></div>
   </section>`;
 }
 function guideCard(key) {
   const guide = guides[key];
-  return `<button class="guide surface" data-action="guide" data-value="${key}">
+  return `<button class="guide" data-action="guide" data-value="${key}">
     <span class="tile ${key}">${icon(key === 'warm' ? 'flame' : 'leaf')}</span>
-    <span><strong>${guide.title}</strong><small>${guide.subtitle} · ${guide.duration}</small></span>
+    <span><strong>${guide.title}</strong> <small>${guide.duration}</small></span>
     ${icon('right')}
   </button>`;
+}
+function reviewNote(number) {
+  const review = reviews[number];
+  if (review?.mode === 'light') return 'Tres sesiones más ligeras para retomar la técnica y recuperarte.';
+  if (review?.mode === 'build') return 'Cuatro sesiones. Suma una serie a los dos primeros movimientos de cada día.';
+  if (review?.mode === 'split') return 'Cuatro sesiones de torso y pierna con dos series por ejercicio.';
+  if (review?.mode === 'base') return 'Tres sesiones de cuerpo completo. Mantén la frecuencia mientras consolidas técnica y constancia.';
+  if (number === 0) return 'Tus primeras visitas fueron de adaptación. Esta semana usa cargas que puedas controlar y deja 3–4 repeticiones en reserva.';
+  if (locked(number)) return 'Esta semana ya está en marcha con tres sesiones de cuerpo completo. Podrás ajustar la próxima antes de empezarla.';
+  if (number === 1) return 'Revisa cómo te recuperaste para ajustar el esfuerzo de esta semana.';
+  return 'Revisa la semana anterior para decidir si toca mantener tres sesiones o pasar a torso y pierna.';
+}
+function coach() {
+  const review = reviews[week];
+  return `<section class="coach">
+    <div class="tag">AJUSTE SEMANAL</div>
+    <h2>${review ? review.mode === 'light' ? 'Baja un cambio' : weekSchedule(week).length === 4 ? 'Torso y pierna' : 'Mantén la base' : currentBlock(week).title}</h2>
+    <p>${reviewNote(week)}</p>
+    ${week > 0 && !locked(week) ? `<button class="text-button" data-action="review">${review ? 'Editar revisión' : 'Revisar mi semana'} ${icon('arrow')}</button>` : ''}
+  </section>`;
 }
 function exerciseList(session) {
   return `<section class="workout" id="workout" tabindex="-1">
@@ -104,46 +152,76 @@ function exerciseList(session) {
         <button class="exercise-info" data-action="exercise" data-value="${id}"><strong>${name}</strong><small>${group}</small></button>
         <span class="prescription">${series(session, id)} × ${reps}${Number.isFinite(record?.weight) ? `<small>${record.weight} kg</small>` : ''}</span>
         <button class="play" data-action="video" data-value="${id}" aria-label="Video de ${name}">${icon('play')}</button>
-        <label class="check"><input type="checkbox" data-exercise="${id}" aria-label="Completar ${name}" ${record?.done ? 'checked' : ''}><span>${icon('check')}</span></label>
+        <label class="check"><input type="checkbox" data-exercise="${id}" aria-label="Completar ${name}" ${record?.done ? 'checked' : ''}><span></span></label>
       </article>`;
     }).join('')}</div>
   </section>`;
 }
 function trainingView() {
   const session = selectedSession();
-  return `<header class="page-top"><span>ENTRENAMIENTO PERSONAL</span><a href="#plan">${icon('target')} Fuerza y músculo</a></header>
+  return `<div class="dashboard">
+    ${calendar()}
     ${hero(session)}
-    <div class="dashboard">
-      <div class="workout-column">${session ? exerciseList(session) : `<section class="surface rest"><h2>Recuperación</h2><p>Si cambias tus días de entrenamiento, deja al menos un día entre sesiones de fuerza.</p></section>`}</div>
-      <aside class="day-column" aria-label="Semana y guías">
-        ${calendar()}
-        <section class="guide-stack"><h2>Antes y después</h2>${guideCard('warm')}${guideCard('cool')}</section>
-        <section class="surface tip"><span class="tile warm">${icon('target')}</span><div><h2>${phase()[1]}</h2><p>${phase()[2]}</p></div></section>
-      </aside>
-    </div>`;
+    ${coach()}
+    <div class="workout-column">
+      ${session ? `${guideCard('warm')}${exerciseList(session)}${guideCard('cool')}` :
+        '<section class="rest"><h2>Día libre</h2><p>En torso y pierna puedes entrenar dos días seguidos alternando la zona. Con cuerpo completo, conserva un día libre entre sesiones.</p></section>'}
+    </div>
+  </div>`;
 }
 function planView() {
-  return `<header class="subpage"><h1>Mi plan</h1><p>Ocho semanas de cuerpo completo para ganar fuerza y músculo.</p></header>
-  <div class="plan-layout"><div class="phase-list">${phases.map(([name, goal, description], index) => `<section class="surface phase"><span class="tag">SEMANAS ${index * 2 + 1}–${index * 2 + 2}</span><h2>${name}</h2><h3>${goal}</h3><p>${description}</p><div class="phase-actions">${[index * 2, index * 2 + 1].map(number => `<button class="secondary" data-action="open-week" data-value="${number}">Semana ${number + 1} ${icon('arrow')}</button>`).join('')}</div></section>`).join('')}</div>
-  <aside class="surface notes"><h2>Cómo seguir tu plan</h2>
-  <p><strong>Semanas 1–2.</strong> Lunes y jueves. Semanas 3–8, lunes, miércoles y viernes. Puedes mover los días dejando un día libre entre sesiones. Si faltas, retoma la sesión pendiente cuando puedas.</p>
-  <p><strong>Repeticiones en reserva.</strong> Son las que estimas que aún podrías hacer con buena técnica al terminar una serie. Baja la carga si tu movimiento pierde control.</p>
-  <p><strong>Ajuste para tu estatura (1.89 m).</strong> Ajusta asiento y respaldo antes de cargar. Pide al personal que te muestre cómo alinear la máquina si el recorrido se siente incómodo. Elige el peso inicial por control y esfuerzo.</p>
+  return `<header class="subpage"><div class="tag">FUERZA Y MÚSCULO</div><h1>Mi plan</h1><p>Ocho semanas. Ajusta el siguiente paso según cómo vas entrenando.</p></header>
+  <div class="plan-layout"><div class="phase-list">${blocks.map(({ start, end, title, description }) => `<section class="phase">
+    <span class="phase-range">${pad(start + 1)}<small>—${pad(end + 1)}</small></span>
+    <div><h2>${title}</h2><p>${description}</p><div class="phase-actions">${[start, end].map(number => `<button class="secondary" data-action="open-week" data-value="${number}">Semana ${number + 1} ${icon('arrow')}</button>`).join('')}</div></div>
+  </section>`).join('')}</div>
+  <aside class="notes"><h2>Cómo ajustar el esfuerzo</h2>
+  <p><strong>Repeticiones en reserva.</strong> Son las repeticiones que estimas que podrías hacer con buena técnica al terminar una serie. Reduce la carga si pierdes control. Mantén margen antes del fallo durante todo el plan.</p>
+  <p><strong>Tus días.</strong> Cuerpo completo: lunes, miércoles y viernes. Torso y pierna: lunes, martes, jueves y viernes. Si faltas, retoma la sesión pendiente cuando puedas.</p>
+  <p><strong>Ajusta el equipo a tu estatura.</strong> Alinea asiento y respaldo antes de cargar. Si una máquina limita tu recorrido, pide al personal que te ayude a ajustarla.</p>
   <p><strong>Dolor.</strong> Detén el ejercicio si aparece dolor agudo o articular. Si persiste, consulta a un profesional de salud antes de retomarlo.</p>
-  <p class="sources">Fuentes <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC12965823/" rel="noreferrer">ACSM</a> · <a href="https://www.heart.org/en/healthy-living/exercise-and-physical-activity/fitness-basics/warm-up-cool-down" rel="noreferrer">American Heart Association</a></p>
+  <p class="sources">Fuentes <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC12965823/">ACSM</a> · <a href="https://pubmed.ncbi.nlm.nih.gov/38595233/">Cuerpo completo y rutinas divididas</a> · <a href="https://www.heart.org/en/healthy-living/exercise-and-physical-activity/fitness-basics/warm-up-cool-down">AHA</a></p>
   </aside></div>`;
 }
+function historyRows(sessions, log) {
+  return sessions.filter(session => session.exercises.some(id => {
+    const record = entry(session, log)[id];
+    return record?.done || Number.isFinite(record?.weight);
+  })).reverse().map(session => `<details><summary>Semana ${session.week + 1} · ${dayNames[session.day]} · ${session.title} <small>${count(session, log)}/${session.exercises.length} completos</small></summary><ul>${session.exercises.map(id => {
+    const record = entry(session, log)[id];
+    return `<li>${exercises[id][0]} <span>${Number.isFinite(record?.weight) ? `${record.weight} kg · ` : ''}${record?.done ? 'Completo' : 'Pendiente'}</span></li>`;
+  }).join('')}</ul></details>`).join('');
+}
 function progressView() {
+  const sessions = planSessions();
   const done = sessions.filter(complete).length;
   const marks = sessions.reduce((sum, session) => sum + count(session), 0);
-  const history = sessions.filter(session => session.exercises.some(id => entry(session)[id]?.done || Number.isFinite(entry(session)[id]?.weight))).reverse();
-  return `<header class="subpage"><h1>Mi progreso</h1><p>Tu constancia y tus cargas, guardadas en este dispositivo.</p></header>
-  <div class="metrics"><div class="surface metric"><strong>${done}<small> / ${sessions.length}</small></strong>Sesiones completas</div><div class="surface metric"><strong>${marks}</strong>Ejercicios marcados</div><div class="surface metric"><strong>${Math.round(done / sessions.length * 100)}%</strong>Del plan completo</div></div>
-  <section class="surface history"><h2>Historial de entrenamiento</h2>
-  ${history.length ? history.map(session => `<details><summary>Semana ${session.week + 1} · ${dayNames[session.day]} · ${session.title} <small>${count(session)}/5 completos</small></summary><ul>${session.exercises.map(id => {
-    const record = entry(session)[id];
-    return `<li>${exercises[id][0]} <span>${Number.isFinite(record?.weight) ? `${record.weight} kg · ` : ''}${record?.done ? 'Completo' : 'Pendiente'}</span></li>`;
-  }).join('')}</ul></details>`).join('') : '<p>Aquí aparecerán tus sesiones cuando marques un ejercicio o guardes una carga.</p><a class="primary" href="#entrenar">Ir a entrenar</a>'}</section>`;
+  const history = historyRows(sessions, data);
+  const earlier = historyRows(legacySessions, legacy);
+  return `<header class="subpage"><div class="tag">BITÁCORA</div><h1>Mi progreso</h1><p>Tus sesiones y cargas se guardan en este dispositivo.</p></header>
+  <div class="metrics"><div class="metric"><strong>${pad(done)}</strong>Sesiones completas</div><div class="metric"><strong>${pad(marks)}</strong>Ejercicios marcados</div><div class="metric"><strong>${pad(Object.keys(reviews).length)}</strong>Revisiones semanales</div></div>
+  <section class="history"><h2>Historial del plan actual</h2>
+  ${history || '<p>Tus sesiones aparecerán al marcar un ejercicio o guardar una carga.</p><a class="text-button" href="#entrenar">Ir a entrenar →</a>'}</section>
+  ${earlier ? `<section class="history"><h2>Historial del plan anterior</h2>${earlier}</section>` : ''}`;
+}
+function reviewDialog() {
+  const previous = weekSchedule(week - 1);
+  const finished = previous.filter(complete).length;
+  const answers = reviews[week]?.answers || {};
+  const questions = [
+    ['recovered', '¿Llegaste recuperado a la siguiente sesión?'],
+    ['technique', '¿Pudiste terminar con buena técnica y repeticiones en reserva?'],
+  ];
+  if (week >= 2) questions.push(['available', '¿Puedes entrenar cuatro días esta semana?']);
+  dialog('Revisión semanal', `Semana ${pad(week + 1)}`, `
+    <p>Semana anterior: ${finished} de ${previous.length} sesiones completas.</p>
+    <form id="review-form">
+      ${questions.map(([id, question]) => `<fieldset><legend>${question}</legend><div class="choices">
+        <label><input type="radio" required name="${id}" value="yes" ${answers[id] === true ? 'checked' : ''}><span>Sí</span></label>
+        <label><input type="radio" name="${id}" value="no" ${answers[id] === false ? 'checked' : ''}><span>No</span></label>
+      </div></fieldset>`).join('')}
+      <button class="primary">Ajustar mi semana ${icon('arrow')}</button>
+    </form>`);
 }
 function render() {
   const locationPage = location.hash.slice(1);
@@ -170,7 +248,7 @@ function exerciseDialog(id, showVideo) {
     <div class="dialog-meta"><span>${series(session, id)} series × ${reps}${id === 'plank' ? '' : ' reps'}</span><span>${seconds} s de descanso</span></div>
     <p>${instructions}</p>
     <div class="dialog-actions"><a class="secondary" href="https://www.youtube.com/watch?v=${video}" rel="noopener">${icon('play')} Abrir en YouTube</a><button class="secondary" data-action="timer" data-value="${seconds}">${icon('clock')} Iniciar descanso</button></div>
-    ${id !== 'plank' && id !== 'bridge' ? `<form id="weight-form" data-id="${id}"><label for="weight">Carga usada (kg)</label><div><input id="weight" name="weight" type="number" min="0" max="999" step="any" inputmode="decimal" value="${weight ?? ''}" placeholder="${previous ?? '0'}"><button class="primary">Guardar carga</button></div>${previous !== undefined ? `<small>Última carga registrada: ${previous} kg</small>` : ''}</form>` : ''}
+    ${!group.includes('Peso corporal') ? `<form id="weight-form" data-id="${id}"><label for="weight">Carga usada (kg)</label><div><input id="weight" name="weight" type="number" min="0" max="999" step="any" inputmode="decimal" value="${weight ?? ''}" placeholder="${previous ?? '0'}"><button class="primary">Guardar carga</button></div>${previous !== undefined ? `<small>Última carga registrada: ${previous} kg</small>` : ''}</form>` : ''}
   `);
 }
 function startTimer(seconds) {
@@ -192,7 +270,7 @@ function updateTimer() {
 }
 function selectWeek(number) {
   week = number;
-  day = (weeks[week].find(item => !complete(item)) || weeks[week][0]).day;
+  day = (weekSchedule(week).find(item => !complete(item)) || weekSchedule(week)[0]).day;
 }
 document.addEventListener('click', event => {
   const button = event.target.closest('button[data-action]');
@@ -206,7 +284,7 @@ document.addEventListener('click', event => {
     (replacement?.disabled ? main.querySelector('.day[aria-pressed="true"]') : replacement)?.focus({ preventScroll: true });
   }
   if (action === 'open-week' || action === 'next') {
-    if (action === 'next' && sessions.every(complete)) {
+    if (action === 'next' && planSessions().every(complete)) {
       location.hash = 'progreso';
       return;
     }
@@ -222,6 +300,7 @@ document.addEventListener('click', event => {
     else focusWorkout();
   }
   if (action === 'guide') openGuide(value);
+  if (action === 'review' && week > 0 && !locked(week)) reviewDialog();
   if (action === 'workout') {
     modal.close();
     requestAnimationFrame(focusWorkout);
@@ -253,13 +332,28 @@ document.addEventListener('change', event => {
   if (complete(session)) announce('Sesión completa. Puedes hacer la vuelta a la calma.');
 });
 document.addEventListener('submit', event => {
+  if (event.target.id === 'review-form') {
+    event.preventDefault();
+    if (week === 0 || locked(week)) return;
+    const form = new FormData(event.target);
+    const answers = Object.fromEntries([...form].map(([name, value]) => [name, value === 'yes']));
+    const previous = weekSchedule(week - 1);
+    reviews[week] = { answers, mode: recommend(week, answers, previous.every(complete), previous[0].mode) };
+    const saved = persist();
+    modal.close();
+    selectWeek(week);
+    render();
+    main.querySelector('.text-button[data-action="review"]')?.focus({ preventScroll: true });
+    if (saved) announce(reviewNote(week));
+    return;
+  }
   if (event.target.id !== 'weight-form') return;
   event.preventDefault();
   const value = event.target.elements.weight.value;
-  save(selectedSession(), event.target.dataset.id, { weight: value === '' ? null : Number(value) });
+  const saved = save(selectedSession(), event.target.dataset.id, { weight: value === '' ? null : Number(value) });
   modal.close();
   render();
-  announce(value === '' ? 'Carga eliminada.' : 'Carga guardada.');
+  if (saved) announce(value === '' ? 'Carga eliminada.' : 'Carga guardada.');
 });
 modal.addEventListener('close', () => { modal.replaceChildren(); });
 window.addEventListener('hashchange', render);
